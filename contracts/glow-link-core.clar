@@ -122,31 +122,9 @@
 
 ;; ---------- Private Functions ----------
 
-;; Validate that a skin type is valid
-(define-private (is-valid-skin-type (skin-type (string-ascii 20)))
-  (default-to false (some (compose-lambda (valid-type) (is-eq valid-type skin-type)) (var-get valid-skin-types)))
-)
 
-;; Validate that a list of concerns contains only valid concerns
-(define-private (validate-concerns (concerns (list 5 (string-ascii 20))))
-  (fold and true (map validate-concern concerns))
-)
-
-;; Validate that a single concern is valid
-(define-private (validate-concern (concern (string-ascii 20)))
-  (default-to false (some (compose-lambda (valid-concern) (is-eq valid-concern concern)) (var-get valid-concerns)))
-)
 
 ;; Validate that a list of goals contains only valid goals
-(define-private (validate-goals (goals (list 5 (string-ascii 20))))
-  (fold and true (map validate-goal goals))
-)
-
-;; Validate that a single goal is valid
-(define-private (validate-goal (goal (string-ascii 20)))
-  (default-to false (some (compose-lambda (valid-goal) (is-eq valid-goal goal)) (var-get valid-goals)))
-)
-
 ;; Check if the caller is a verified expert
 (define-private (is-verified-expert (caller principal))
   (is-some (map-get? verified-experts { expert: caller }))
@@ -201,32 +179,7 @@
   )
 )
 
-;; Check if a routine is suitable for a user's skin profile
-(define-private (routine-matches-user? 
-  (user-data { skin-type: (string-ascii 20), concerns: (list 5 (string-ascii 20)), goals: (list 5 (string-ascii 20)), registration-time: uint })
-  (routine { 
-    skin-types: (list 5 (string-ascii 20)), 
-    concerns: (list 5 (string-ascii 20)),
-    weather-conditions: { min-temp: int, max-temp: int, min-humidity: uint, max-humidity: uint, max-uv-index: uint },
-    steps: (list 10 { step-order: uint, product-type: (string-ascii 50), instructions: (string-utf8 200) }),
-    expert: principal,
-    name: (string-utf8 100),
-    description: (string-utf8 500),
-    creation-time: uint,
-    rating-count: uint,
-    average-rating: uint
-  }))
-  (let (
-    (skin-type-match (default-to false (some (compose-lambda (type) (is-eq type (get skin-type user-data))) (get skin-types routine))))
-    (concern-match 
-      (fold and true 
-        (map 
-          (compose-lambda (user-concern) 
-            (default-to false (some (compose-lambda (routine-concern) (is-eq routine-concern user-concern)) (get concerns routine))))
-          (get concerns user-data))))
-  )
-  (and skin-type-match concern-match))
-)
+
 
 ;; ---------- Read-Only Functions ----------
 
@@ -285,51 +238,6 @@
   )
 )
 
-;; Register a new user profile
-(define-public (register-user 
-  (skin-type (string-ascii 20))
-  (concerns (list 5 (string-ascii 20)))
-  (goals (list 5 (string-ascii 20))))
-  (let ((sender tx-sender))
-    (asserts! (not (is-user-registered sender)) ERR-USER-ALREADY-EXISTS)
-    (asserts! (is-valid-skin-type skin-type) ERR-INVALID-SKIN-TYPE)
-    (asserts! (validate-concerns concerns) ERR-INVALID-CONCERN)
-    (asserts! (validate-goals goals) ERR-INVALID-GOAL)
-    
-    (ok (map-set user-profiles
-      { user: sender }
-      {
-        skin-type: skin-type,
-        concerns: concerns,
-        goals: goals,
-        registration-time: block-height
-      }
-    ))
-  )
-)
-
-;; Update existing user profile
-(define-public (update-user-profile
-  (skin-type (string-ascii 20))
-  (concerns (list 5 (string-ascii 20)))
-  (goals (list 5 (string-ascii 20))))
-  (let ((sender tx-sender))
-    (asserts! (is-user-registered sender) ERR-USER-NOT-FOUND)
-    (asserts! (is-valid-skin-type skin-type) ERR-INVALID-SKIN-TYPE)
-    (asserts! (validate-concerns concerns) ERR-INVALID-CONCERN)
-    (asserts! (validate-goals goals) ERR-INVALID-GOAL)
-    
-    (ok (map-set user-profiles
-      { user: sender }
-      {
-        skin-type: skin-type,
-        concerns: concerns,
-        goals: goals,
-        registration-time: (get registration-time (unwrap-panic (get-user-profile sender)))
-      }
-    ))
-  )
-)
 
 ;; Verify a skincare expert (only contract admin can do this)
 (define-public (verify-expert (expert principal) (credentials (string-utf8 500)))
@@ -345,62 +253,6 @@
         reputation-score: u80  ;; Start with 80/100 reputation
       }
     ))
-  )
-)
-
-;; Submit a new skincare routine template (only verified experts)
-(define-public (submit-routine-template
-  (name (string-utf8 100))
-  (description (string-utf8 500))
-  (skin-types (list 5 (string-ascii 20)))
-  (concerns (list 5 (string-ascii 20)))
-  (min-temp int)
-  (max-temp int)
-  (min-humidity uint)
-  (max-humidity uint)
-  (max-uv-index uint)
-  (steps (list 10 {
-    step-order: uint,
-    product-type: (string-ascii 50),
-    instructions: (string-utf8 200)
-  })))
-  (let (
-    (sender tx-sender)
-    (routine-id (var-get next-routine-id))
-  )
-    (asserts! (is-verified-expert sender) ERR-EXPERT-NOT-VERIFIED)
-    
-    ;; Validate skin types and concerns
-    (asserts! (fold and true (map is-valid-skin-type skin-types)) ERR-INVALID-SKIN-TYPE)
-    (asserts! (fold and true (map validate-concern concerns)) ERR-INVALID-CONCERN)
-    
-    ;; Create the new routine template
-    (map-set routine-templates
-      { routine-id: routine-id }
-      {
-        expert: sender,
-        name: name,
-        description: description,
-        skin-types: skin-types,
-        concerns: concerns,
-        weather-conditions: {
-          min-temp: min-temp,
-          max-temp: max-temp,
-          min-humidity: min-humidity,
-          max-humidity: max-humidity,
-          max-uv-index: max-uv-index
-        },
-        steps: steps,
-        creation-time: block-height,
-        rating-count: u0,
-        average-rating: u0
-      }
-    )
-    
-    ;; Increment the routine ID counter
-    (var-set next-routine-id (+ routine-id u1))
-    
-    (ok routine-id)
   )
 )
 
